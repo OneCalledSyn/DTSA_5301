@@ -1,0 +1,108 @@
+---
+title: "NYPD Shooting Incidents"
+output:
+  pdf_document: default
+  html_document: default
+date: "5/3/2021"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(randomForest)
+```
+
+```{r get_shooting_data, warning = FALSE, message = FALSE}
+
+url = "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+
+shooting_data = read_csv(url)
+summary(shooting_data)
+```
+
+
+We can see that several categories have a decent amount of missing data. Let's quantify exactly what percentage of info is missing for one of the features in the dataset:<br>
+```{r missing, warning = FALSE, message = FALSE}
+mean(is.na(shooting_data$LOCATION_DESC)) #Check proportion of missing values for a single feature
+#md.pattern(shooting_data) #Check raw number of missing cases for each feature
+sum(is.na(shooting_data)) #Total number of missing cell values
+```
+
+We have several variables missing many entries, some with over 50% of the values absent! There are a handful of ways to deal with this kind of data missing completely at random (MCAR). One method is imputation, in which the missing values are filled in using the existing values as a reference. This can be useful for smaller amounts of missing data, but when over half the values are missing for a feature, it's going to introduce too much bias. Imputing missing data generally works better for continuous values rather than categorical values as well, although there are still ways to impute for missing categorical data. Mode imputation is a spin on regular imputation; the most common category is assigned to all missing values in a feature, but similar to regular imputation, there is an increase in bias and a decrease in variance. Multinomial logistic regression imputation can be used as long as the feature has a small number of categories, so it might have been useful for imputing perpetrator sex if less data was missing. Predictive mean matching imputation can work well on ordered categorical data, such as perpetrator age group, but again the percentage of missing data is so high that the most logical solution is to simply exclude any features missing large swaths of data or exclude any observation that has data missing for any of the features. 
+
+In the case of this dataset, the solution depends on how important analysis of the perpetrator is, since most of the heavily missing data is focused on them. If perp analysis is valued here, remove incomplete observations and keep all of the features; if not, remove those perp features and keep all of the observations.<br>
+
+```{r removal, warning = FALSE, message = FALSE}
+shooting_cleaned <- shooting_data %>%
+  select(-c(INCIDENT_KEY, LOCATION_DESC, PERP_AGE_GROUP, PERP_SEX, PERP_RACE, X_COORD_CD, Y_COORD_CD,
+            Lon_Lat)) %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE), JURISDICTION_CODE = as.factor(JURISDICTION_CODE),
+         STATISTICAL_MURDER_FLAG = as.factor(STATISTICAL_MURDER_FLAG), PRECINCT = as.factor(PRECINCT)) %>%
+  mutate_if(is.character, as.factor) %>%
+  na.omit()
+
+shooting_cleaned
+summary(shooting_cleaned)
+```
+
+
+I have chosen to remove the features that were missing too much data and keep the vast majority of the observations intact. Only a couple of observations were missing enough feature values that they had to be removed with `na.omit()`.
+<br>
+
+By faceting the number of shootings by the sex of the victim, we are able to see a sex breakdown for each of the five boroughs. We can easily see that males are overwhelmingly the victims of shootings in New York.<br>
+
+
+```{r victim_sex, warning = FALSE, message = FALSE}
+
+ggplot(shooting_cleaned) + 
+  geom_bar(aes(x = BORO, fill = BORO)) +
+  facet_wrap(~VIC_SEX) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Shooting Victims in NY by Sex", y = NULL)
+
+```
+
+
+Similarly, we can also facet the shootings per borough by the racial attributes of the victims, revealing that the victims are also overwhelmingly black:<br>
+
+
+```{r victim_race, warning = FALSE, message = FALSE}
+
+ggplot(shooting_cleaned) + 
+  geom_bar(aes(x = BORO, fill = BORO)) +
+  facet_wrap(~VIC_RACE) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Shooting Victims in NY by Race", y = NULL)
+
+```
+
+Finally, I will train a random forest model on a portion of the dataset and use the model to try to predict whether a shooting victim was murdered based on the victim's race, sex, age group, and the borough the crime occurred in:<br>
+
+```{r gender_time, warning = FALSE, message = FALSE}
+train <- shooting_cleaned[1:20000, ]
+test <- shooting_cleaned[20001:23566, ]
+
+rf_model <- randomForest(STATISTICAL_MURDER_FLAG ~ VIC_RACE + VIC_SEX + VIC_AGE_GROUP + BORO, data = train, proximity = TRUE)
+#rf_model
+
+test$predicted <- predict(rf_model, test)
+confusionMatrix(test$STATISTICAL_MURDER_FLAG, test$predicted)
+
+```
+
+The model appears to have a decent accuracy rate of correctly predicting the outcome about 80% of the time. That being said, less than 20% of the shootings victims die, so by simply guessing that the victim lives every time, the model would technically have a higher accuracy, although the model would never correctly predict a victim dying even once.
+
+## Conclusion
+
+Both of the visualizations seem to indicate that Brooklyn is the most dangerous borough for gun violence by far, and Staten Island is the least dangerous borough for gun violence by far. However, this only takes into account the raw number of reported cases and does not consider population density, so violence per capita data could yield different results. There could be bias present in the way the data was reported and recorded. For example, the term 'shooting victim' could refer to a person who has a gun pulled on them in one precinct, in another precinct an actual shot had to have been fired for it to count as a victim, and in yet another the person might have had to been actually hit by the bullet for it to be recorded as a shooting victim. Another source of bias is that not all shootings will be reported. One could reasonably assume that a higher percentage of dead shootings victims are reported than victims of non-lethal shootings, for the simple reason that dead people cannot walk away from the crime scene and remain silent about what occurred. If the fatality rate of the shootings was examined, the biased reported data would likely overestimate the true population parameter of the shooting fatality rate. In terms of personal bias, I would say there is very little because the data set was chosen for me so I have no personal connection to it and the conclusions I drew from the data visualizations were overwhelmingly apparent and entirely unambiguous. That being said, the manner in which I chose to tidy and clean the data had personal bias, because I chose to exclude certain features due to the amount of missing data when I could have kept them and excluded observations that were missing data instead. This caused my analysis to focus more on the victims of the shootings because the features about the perpetrators of the shootings were largely removed.
+
+```{r}
+sessionInfo()
+```
