@@ -1,0 +1,376 @@
+---
+title: "An Examination of the Spread of COVID-19 in the United States"
+#author: "Jay Shapiro"
+#date: "6/21/2021"
+output: 
+  html_document:
+    theme: cerulean
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Data Description
+
+These COVID-19 datasets are collected and maintained through a subsection of Johns Hopkins University. Each day, the total number of confirmed COVID-19 cases and deaths is updated for each country in the world, and each of the states in the US, to provide accurate and updated time series data on the proliferation of the virus. The datasets can be found at the following URL: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series   
+
+
+## Data Cleaning
+```{r import, warning = FALSE, message = FALSE}
+
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(leaps)
+library(plotly)
+library(usmap)
+
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+file_names <- c("time_series_covid19_confirmed_US.csv",
+                "time_series_covid19_deaths_US.csv",
+                "time_series_covid19_confirmed_global.csv",
+                "time_series_covid19_deaths_global.csv")
+
+urls <- str_c(url_in, file_names)
+#urls
+
+us_cases <- read_csv(urls[1])
+us_deaths <- read_csv(urls[2])
+global_cases <- read_csv(urls[3])
+global_deaths <- read_csv(urls[4])
+
+```
+
+```{r cases, warning = FALSE, message = FALSE}
+
+#Tidy the data so that each date is on a separate row
+global_cases <- global_cases %>%
+  pivot_longer(cols = -c(`Province/State`, `Country/Region`, Lat, Long),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(-c(Lat, Long))
+
+#global_cases
+
+```
+
+```{r deaths, warning = FALSE, message = FALSE}
+
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c(`Province/State`, `Country/Region`, Lat, Long),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(-c(Lat, Long))
+
+#global_deaths
+
+```
+
+```{r join_global, warning = FALSE, message = FALSE}
+
+global <- global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Country_Region = `Country/Region`,
+        Province_State = `Province/State`) %>%
+  mutate(date = mdy(date))
+
+#global
+#summary(global)
+
+global <- global %>%
+  filter(cases > 0)
+#summary(global)
+```
+
+```{r us_cases, warning = FALSE, message = FALSE}
+us_cases <- us_cases %>%
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+#us_cases
+```
+
+```{r us_deaths, warning = FALSE, message = FALSE}
+us_deaths <- us_deaths %>%
+  pivot_longer(cols = -(UID:Population),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+#us_deaths
+```
+
+```{r us_join, warning = FALSE, message = FALSE}
+US <- us_cases %>%
+  full_join(us_deaths)
+
+#US
+```
+
+```{r unite, warning = FALSE, message = FALSE}
+global <- global %>%
+  unite("Combined_Key", 
+        c(Province_State, Country_Region),
+        sep = ", ",
+        na.rm = TRUE,
+        remove = FALSE)
+
+#global
+```
+
+```{r add_pop, warning = FALSE, message = FALSE}
+
+uid_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+
+uid <- read_csv(uid_url) %>%
+  select(-c(Lat, Long_, Combined_Key, code3, iso2, iso3, Admin2))
+
+global <- global %>%
+  left_join(uid, by = c("Province_State", "Country_Region")) %>%
+  select(-c(UID, FIPS)) %>%
+  select(Province_State, Country_Region, date,
+         cases, deaths, Population, Combined_Key)
+#global
+
+```
+
+```{r per_state, warning = FALSE, message = FALSE}
+
+US_by_state <- US %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(Province_State, Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+
+#US_by_state
+
+```
+
+```{r us_tot, warning = FALSE, message = FALSE}
+
+US_totals <- US_by_state %>%
+  group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(Country_Region, date, cases, deaths) %>%
+  ungroup()
+
+#US_totals
+```
+
+
+## Visualizations
+
+
+```{r plot_totals, warning = FALSE, message = FALSE}
+
+US_totals %>%
+  filter(cases > 0 ) %>%
+  ggplot(aes(x = date, y = cases)) + 
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID-19 in the US", y = "Total", x = "Date")
+
+```
+
+The COVID-19 cases and deaths in the United States both continue to rise over time, however, it becomes more difficult to tell after a certain point because of the logarithmic scale of the graph. A more digestible way to examine the COVID-19 case data is to instead look at the number of *new* cases and *new* deaths each day, rather than the aggregate cases and deaths.
+
+```{r plot_totals_NY, warning = FALSE, message = FALSE}
+state = "Virginia"
+
+US_by_state %>%
+  filter(Province_State == state ) %>%
+  filter(cases > 0 ) %>%
+  ggplot(aes(x = date, y = cases)) + 
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID19 in Virginia", y = NULL)
+
+```
+
+Similar to the national data, the cases and deaths both continue to rise in the state of Virginia. Again, we will leverage the use of new cases and deaths per day to receive a better understanding of whether the spread of COVID-19 is accelerating, decelerating, or holding steady.
+
+```{r, warning = FALSE, message = FALSE}
+
+max(US_totals$date)
+max(US_totals$deaths)
+
+US_by_state <- US_by_state %>%
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths))
+
+US_totals <- US_totals %>%
+  mutate(new_cases = cases -lag(cases),
+         new_deaths = deaths - lag(deaths))
+
+tail(US_totals %>% select(new_cases, new_deaths, everything()))
+```
+
+```{r, warning = FALSE, message = FALSE}
+
+US_totals %>%
+  ggplot(aes(x = date, y = new_cases)) +
+  geom_line(aes(color = "new_cases")) +
+  geom_point(aes(color = "new_cases")) +
+  geom_line(aes(y = new_deaths, color = "new_deaths")) +
+  geom_point(aes(y = new_deaths, color = "new_deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID19 in the US", y = "Totals", x = "Date")
+
+```
+
+We see that the number of new cases and new deaths per day has been decreasing since the beginning of the 2021 calendar year. Despite this, the new COVID-19 deaths in the US is still close to 1000 per day, and the new COVID-19 cases is around 10,000 a day. The spread of the virus in the US appears to be lessening but it is still spreading rapidly.  
+
+```{r, warning = FALSE, message = FALSE}
+
+state = "Virginia"
+
+US_by_state %>%
+  filter(Province_State == state ) %>%
+  filter(cases > 0 ) %>%
+  ggplot(aes(x = date, y = new_cases)) + 
+  geom_line(aes(color = "new_cases")) +
+  geom_point(aes(color = "new_cases")) +
+  geom_line(aes(y = new_deaths, color = "new_deaths")) +
+  geom_point(aes(y = new_deaths, color = "new_deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID19 in Virginia", y = NULL)
+
+```
+
+Specifically in Virginia, the volume of new daily cases at the beginning of the year was cresting at nearly 10000, and now it is all the way down to only 100 new cases per day. Likewise, the new daily deaths has dropped to less than 10, so it appears that Virginia is making good headway towards curbing COVID-19.
+
+```{r, warning = FALSE, message = FALSE}
+
+US_state_totals <- US_by_state %>%
+  group_by(Province_State) %>%
+  summarize(deaths = max(deaths), cases = max(cases),
+            population = max(Population),
+            cases_per_thou = 1000 * cases / population,
+            deaths_per_thou = 1000 * deaths / population) %>%
+  filter(cases > 0, population > 0)
+
+US_state_totals %>%
+  slice_min(deaths_per_thou, n = 10)
+
+US_state_totals %>%
+  select(deaths_per_thou, cases_per_thou, everything())
+  
+```
+## Linear Models
+
+
+```{r, warning = FALSE, message = FALSE}
+
+mod <- lm(deaths_per_thou ~ cases_per_thou, data = US_state_totals)
+summary(mod)
+
+mod2 <- lm(deaths_per_thou ~ cases_per_thou + population, data = US_state_totals)
+summary(mod2)
+
+anova(mod, mod2)
+
+US_state_totals %>%
+  slice_min(cases_per_thou)
+
+US_state_totals %>%
+  slice_max(cases_per_thou)
+
+US_state_totals %>%
+  mutate(pred = predict(mod))
+
+US_total_w_pred <- US_state_totals %>%
+  mutate(pred = predict(mod), pred2 = predict(mod2), std_ratio = ((deaths_per_thou / cases_per_thou) - (mean(deaths_per_thou) / mean(cases_per_thou))) / sd(deaths_per_thou / cases_per_thou))
+US_total_w_pred
+
+US_total_w_pred %>%
+  ggplot() +
+  geom_point(aes(x = cases_per_thou, y = deaths_per_thou), color = "blue") +
+  geom_point(aes(x = cases_per_thou, y = pred), color = "red") +
+  geom_point(aes(x = cases_per_thou, y = pred2), color = "green")
+
+```
+
+We can create a linear regression model with `deaths_per_thou` as the response and `cases_per_thou` as the sole predictor. The F-statistic for the model is statistically significant at the alpha level of 0.05, so we can conclude that the model is a better fit to the data than the null model would be. The p-value for the predictor is also significant at the alpha level of 0.05, indicating that it should be included in the model. Using the linear model, we can make predictions for the fitted values of the response for different values of the predictor. By juxtaposing the fitted values (in red) and the actual values (in blue), it is evident that while there is certainly a linear trend in the actual data, a large portion of the variability in the response is unexplained by our simple linear regression model. This can also be seen analytically by examining the adjusted $R^2$ value, which is ~0.53.
+
+Creating a second linear model and adding in a second predictor, population, could potentially help model the response more accurately. While this model does have a lower residual sum of squares (RSS) than the one predictor model, it is known that adding predictors will always decrease the RSS. To check if this new model is better, we perform an F-test on the two models using the `anova` function. Since the F-statistic of 3.1013 yields a p-value of 0.084, we fail to reject the null hypothesis that the two models are statistically different at the alpha = 0.05 level. When two models offer similar explanatory power, we opt to select the more parsimonious model to eschew needless complexity. This means we should select the single predictor model as the better model of the two.
+
+Plotting the second model's fitted values (in green) against the actual response values (still in blue) graphically looks like a much better model fit. While the second model is statistically better at even the alpha = 0.1 level, it would be unethical to select or change the critical level after running analysis; the pre-selected alpha value must be maintained to preserve scientific integrity. 
+
+## Interactive Graph
+
+```{r, warning = FALSE, message = FALSE}
+
+fig <- plot_ly(US_total_w_pred, x = ~cases_per_thou, y = ~deaths_per_thou, text = ~Province_State, type = 'scatter', mode = 'markers', color = ~population,
+        marker = list(opacity = 0.7))
+fig <- fig %>% layout(title = 'COVID-19 Cases and Deaths by US State',
+         xaxis = list(showgrid = FALSE),
+         yaxis = list(showgrid = FALSE)) #%>%
+        #add_trace(
+          #type = 'scatter',
+          #hovertemplate = paste('<i>Cases Per Thou</i>: %{x:.2f}',
+                          #'<br><i>Deaths Per Thou</i>: %{y:.2f}<br>',
+                          #'<b>%{:Country_Region}</b><extra></extra>')
+        #)
+
+fig
+
+```
+
+To get a better picture of what the data for each individual state looks like, we can use `plotly` to get hovertext to show up over each data point. This enables us to see the name of the state, the `cases_per_thou`, the `deaths_per_thou`, and the population can be estimated by the colorscale shown in the legend. Interestingly, most of the states with both the lowest and the highest `cases_per_thou` are low in total population. The data suggests that there are some other important factors at play that are not fully encapsulated by the dataset.  
+
+## Chloropleths
+```{r, warning = FALSE, message = FALSE}
+US_chloropleth <- US_state_totals %>% 
+  mutate(state = Province_State)
+
+plot_usmap(data = US_chloropleth, 
+           values = "deaths_per_thou") + 
+    scale_fill_gradient(name = "Deaths per thousand",
+                      low = "green", high = "red") +
+  theme(legend.position = "right") +
+  labs(title = "COVID-19 Deaths Per Thousand People in the US")
+
+plot_usmap(data = US_chloropleth, 
+           values = "cases_per_thou") + 
+    scale_fill_gradient(name = "Cases per thousand",
+                      low = "green", high = "red") +
+  theme(legend.position = "right") +
+  labs(title = "COVID-19 Cases Per Thousand People in the US")
+```
+
+One question of interest is what is the effect of geographic location on the severity of COVID-19 cases and deaths? Are there clusters of states that have similar COVID-19 rates? To check on this, we can construct a chloropleth for both `cases_per_thou` and `deaths_per_thou` to see if there are any pictorially discernible patterns. The `cases_per_thou` chloropleth shows two clusters in the Northwest and the Northeast with a low number cases and then one cluster in the upper Midwest with a high number of cases. The `deaths_per_thou` chloropleth shows low death clusters in the same places again, but the highest death cluster is in the lower Northeast this time and the second highest death cluster is the entire line of Southern states. Both chloropleths strongly suggest that the geographical aspect of the COVID-19 spread is relevant to some degree.
+
+## Conclusion and Sources of Bias
+
+COVID-19 is a very serious pandemic and the more we can understand about how and why it spreads, the better we can fight against its proliferation. The collected data gives us some insight on how the population of an area and the number of cases per thousand citizens can effect the number of deaths per thousand citizens for that area. I chose to focus my statistical modeling on the US data and used linear regression models to procure predictions for the deaths per thousand for each state. However, the linear models available to explain the response given the predictors available in the data could be drastically improved. For the purposes of doing a deeper analysis, a few predictors that could be a boon to be able to add to the models at the state level would be population density, political view, lockdown restrictions, testing rate, daily vaccinations, and temperature.
+
+One large potential source of bias in the data collection is how the states elect to report confirmed cases and deaths. Depending on their individual infrastructure for data collection, reports could be slow, incomplete, or misrecorded. Another important factor that can bias the data of the COVID-19 cases would be the rate at which individuals are getting tested, both asymptomatically and after they feel ill. The true population parameter of the infected people could be dramatically different if sick individuals are getting officially recorded in the system, leading to a significant bias in the direction of underestimation. A source of potential personal bias is that I chose to focus on the US data for modeling and largely ignored the global data, since I am from the United States. One final bias source is the alpha level of 0.05 that I chose before starting to analyze; I picked the default value because I do not have knowledge about virology so it is possible that the typical value for this field of study should be different. There could have been different conclusion to draw when examining a more eclectic source of COVID-19 data that I missed out on from analyzing from a domestic point of view. The data shows that COVID-19 is still very potent but on the decline, so hopefully by continuing to employ safety measures and distributing vaccines the brunt of the pandemic will soon be behind us.<br>
+
+## Reproducibility Info
+```{r}
+sessionInfo()
+```
